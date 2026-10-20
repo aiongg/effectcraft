@@ -10,7 +10,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use effectcraft_project::render_queue::{OutputFormat, OutputModule, PostRenderAction, RenderQueueItem, RenderStatus, TemplateVars, expand_template};
+use effectcraft_project::render_queue::{
+    OutputFormat, OutputModule, PostRenderAction, RenderQueueItem, RenderStatus, TemplateVars, expand_template, sequence_path,
+};
 use effectcraft_project::{ItemId, ItemKind, LayerSource, Project};
 use effectcraft_render::{ExprHost, FootageSource};
 use serde::{Deserialize, Serialize};
@@ -338,8 +340,25 @@ impl Session {
     /// The output path of a queue item: template tokens expanded, ending in the format's
     /// extension exactly once ([`OutputFormat::with_extension`]), relative paths resolved against
     /// the project's folder (an unsaved project's against ~/Movies or home). `None` when the comp is gone or the
-    /// output is empty ("Needs Output").
+    /// output is empty ("Needs Output"), or when the path came from the project and is not
+    /// written to ([`Self::output_path`]).
     pub fn resolve_output(&self, item: &RenderQueueItem) -> Option<String> {
+        self.output_path(item).ok().flatten()
+    }
+
+    /// [`Self::resolve_output`], or why an output path stored in the project is not written to:
+    /// it is on another computer or names a device ([`crate::doc_path`]).
+    pub fn output_path(&self, item: &RenderQueueItem) -> Result<Option<String>, String> {
+        let Some(p) = self.expanded_output(item) else { return Ok(None) };
+        if let Some(document) = self.stored_outputs.document(&item.output.output)
+            && let Err(crate::doc_path::NotFollowed::Refused(why)) = crate::doc_path::resolve(&p, document)
+        {
+            return Err(format!("the output {p} is not written: {why}"));
+        }
+        Ok(self.output_in_folder(p))
+    }
+
+    fn expanded_output(&self, item: &RenderQueueItem) -> Option<String> {
         let comp = self.project.comp(item.comp)?;
         let name = self.project.item(item.comp).map(|i| i.name.clone()).unwrap_or_default();
         let tpl = item.output.output.trim();
@@ -354,7 +373,11 @@ impl Session {
         let vars =
             TemplateVars { comp_name: &name, project_name: &pname, width: w, height: h, frame_rate: rate.as_f64(), start_frame: f0, end_frame: f0 + n - 1 };
         // The format's extension exactly once, whatever the name or a save dialog added (#293).
-        let p = item.output.format.with_extension(&expand_template(tpl, item.output.format, &vars));
+        Some(item.output.format.with_extension(&expand_template(tpl, item.output.format, &vars)))
+    }
+
+    /// Expanded output path `p`, taken from the output folder when relative.
+    fn output_in_folder(&self, p: String) -> Option<String> {
         let path = std::path::Path::new(&p);
         if path.is_absolute() {
             return Some(p);
@@ -422,6 +445,40 @@ impl Session {
         out
     }
 
+    /// The first file the output `item` writes to `path` that exists already. Frames an image
+    /// sequence skips (Render Settings ▸ Skip Existing Files) are not replaced and don't count.
+    fn existing_output(&self, item: &RenderQueueItem, path: &str) -> Option<String> {
+        if !item.output.format.is_sequence() {
+            return self.services.exists(path).then(|| path.to_string());
+        }
+        let comp = self.project.comp(item.comp)?;
+        if item.settings.skip_existing {
+            return None;
+        }
+        let f0 = item.settings.first_frame(comp);
+        let frames = i64::try_from(item.settings.frame_count(comp)).unwrap_or(i64::MAX);
+        (0..frames).map(|k| sequence_path(path, f0.saturating_add(k))).find(|f| self.services.exists(f))
+    }
+
+    /// The Storage Overflow folders a render writes to: one that came from the project is taken
+    /// from the project's folder when relative, and left out when it is on another computer or
+    /// names a device ([`crate::doc_path`]).
+    fn overflow_folders(&self) -> Vec<String> {
+        let folders = self.project.render_prefs.overflow_folders.iter();
+        folders
+            .filter_map(|f| match self.stored_outputs.document(f) {
+                None => Some(f.clone()),
+                Some(document) => match crate::doc_path::resolve(f, document) {
+                    Ok(p) => Some(p.to_string_lossy().into_owned()),
+                    Err(why) => {
+                        log::warn!("the Storage Overflow folder {f} is not used: {why}");
+                        None
+                    }
+                },
+            })
+            .collect()
+    }
+
     /// Whether a render job is running.
     pub fn is_rendering(&self) -> bool {
         self.render_job.as_ref().is_some_and(|j| !j.is_finished())
@@ -437,6 +494,14 @@ impl Session {
     /// Returns the ids being rendered. Without threads or an offload (wasm32) the render always
     /// runs to completion before this returns.
     pub fn start_render(&mut self, wait: bool) -> Result<Vec<u64>, String> {
+        self.start_render_with(wait, true)
+    }
+
+    /// [`Self::start_render`]; `overwrite: false` is for renders no one watches start (Watch
+    /// Folder, `effectcraft-cli render --queue`): an item whose output path came from the project
+    /// and has a file there fails, saying which, and the others render. An Output To chosen in
+    /// this session replaces its file either way.
+    pub fn start_render_with(&mut self, wait: bool, overwrite: bool) -> Result<Vec<u64>, String> {
         let offload = self.offload.clone().filter(|_| !wait);
         let wait = wait || (cfg!(target_arch = "wasm32") && offload.is_none());
         if self.is_rendering() {
@@ -453,17 +518,27 @@ impl Session {
             for om in it.output_modules() {
                 let mut m = it.clone();
                 m.output = om.clone();
-                match self.resolve_output(&m) {
-                    Some(p) if formats.contains(&om.format) => {
+                match self.output_path(&m) {
+                    Err(why) => problem = Some(RenderStatus::Failed(why)),
+                    Ok(Some(p)) if formats.contains(&om.format) => {
                         // Settings ▸ Export: Append Bit Depth to File Name, Segment Sequences /
                         // Movie Files.
                         let bits = output_bits(om.format, self.project.settings.bit_depth);
                         let p = self.prefs.output_name(&p, bits);
-                        modules.extend(self.segments(&m, &p));
+                        let segments = self.segments(&m, &p);
+                        let existing = (!overwrite && self.stored_outputs.document(&om.output).is_some())
+                            .then(|| segments.iter().find_map(|(seg, path)| self.existing_output(seg, path)))
+                            .flatten();
+                        match existing {
+                            Some(file) => {
+                                problem = Some(RenderStatus::Failed(format!("{file} exists and is not replaced (render with overwrite to replace it)")))
+                            }
+                            None => modules.extend(segments),
+                        }
                     }
-                    Some(_) => problem = Some(RenderStatus::Failed(format!("{} export is not available", om.format.label()))),
-                    None if self.project.comp(it.comp).is_none() => problem = Some(RenderStatus::Failed("composition missing".into())),
-                    None => problem = Some(RenderStatus::NeedsOutput),
+                    Ok(Some(_)) => problem = Some(RenderStatus::Failed(format!("{} export is not available", om.format.label()))),
+                    Ok(None) if self.project.comp(it.comp).is_none() => problem = Some(RenderStatus::Failed("composition missing".into())),
+                    Ok(None) => problem = Some(RenderStatus::NeedsOutput),
                 }
                 if problem.is_some() {
                     break;
@@ -474,6 +549,7 @@ impl Session {
                 None => items.push(modules),
             }
         }
+        let failure = needs_output.iter().find_map(|(_, st)| if let RenderStatus::Failed(e) = st { Some(e.clone()) } else { None });
         if !needs_output.is_empty() {
             let p = Arc::make_mut(&mut self.project);
             for (id, st) in needs_output {
@@ -484,16 +560,21 @@ impl Session {
             self.bump();
         }
         if items.is_empty() {
-            return Err("nothing is queued: add a composition (Composition ▸ Add to Render Queue) and tick Render".into());
+            return Err(failure.unwrap_or_else(|| "nothing is queued: add a composition (Composition ▸ Add to Render Queue) and tick Render".into()));
         }
         let ids: Vec<u64> = items.iter().filter_map(|m| m.first().map(|(i, _)| i.id)).collect();
+        let mut project = self.project.clone();
+        let overflow = self.overflow_folders();
+        if overflow != project.render_prefs.overflow_folders {
+            Arc::make_mut(&mut project).render_prefs.overflow_folders = overflow;
+        }
         if let Some(off) = offload {
             let id = crate::offload::next_id();
             let inbox = Arc::new(crate::offload::Inbox::default());
             let req = crate::offload::WorkerRequest {
                 id,
-                project: self.project.to_json(),
-                files: crate::offload::footage_files(&self.project),
+                project: project.to_json(),
+                files: crate::offload::footage_files(&project),
                 job: crate::offload::WorkerJob::Render { items },
             };
             off.start(req, inbox.clone())?;
@@ -504,7 +585,7 @@ impl Session {
             return Ok(ids);
         }
         let work = Work {
-            project: self.project.clone(),
+            project,
             footage: self.footage.clone(),
             expr: self.expr.clone(),
             accel: self.accel.clone(),

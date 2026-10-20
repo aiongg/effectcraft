@@ -190,6 +190,7 @@ fn create_proxy(s: &mut Session, p: &Value) -> Result<Value> {
     it.output.channels = Channels::Rgba;
     if let Some(o) = str_p(p, "path").or(str_p(p, "output")) {
         it.output.output = o.to_string();
+        s.stored_outputs.allow_path(o);
     }
     it.post_render = PostRenderAction::SetProxy;
     let id = s.edit("Create Proxy", None, |proj, _| {

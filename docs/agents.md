@@ -296,7 +296,10 @@ build real projects through these interfaces; they are worked examples of everyt
 * **Renders**: `renderQueue.add {comp, format: h264|prores|webm|png…, channels: rgba,
   proresProfile: 4444, output}` then `renderQueue.render {"wait": true}`. Check a render by
   importing it (`file.import`, `file.newCompFromSelection`) and `render_frame {transparent: true}`
-  for its alpha (ProRes 4444 and WebM VP9 alpha both read back as straight alpha).
+  for its alpha (ProRes 4444 and WebM VP9 alpha both read back as straight alpha). Output paths
+  saved in an opened project follow the footage rules (no paths to other computers or devices).
+  `renderQueue.render {"overwrite": false}` keeps files that exist at those saved paths (the item
+  fails); Watch Folder and `effectcraft-cli render --queue` without `--overwrite` render that way.
 * **Essential Graphics**: controls can be addressed by name (`essential.set {"layer":"#1",
   "control":"Title","value":"John Smith"}`); a command that targets an explicit `comp` runs even
   when the active comp would disable it (`essential.exportTemplate {"comp":"Lower Third", …}`).

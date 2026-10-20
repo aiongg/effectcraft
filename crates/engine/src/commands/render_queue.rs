@@ -469,6 +469,14 @@ fn module_mut(it: &mut RenderQueueItem, m: usize) -> &mut OutputModule {
     if m == 0 { &mut it.output } else { &mut it.extra_outputs[m - 1] }
 }
 
+/// An Output To given in `p` was chosen in this session: render to it as given (see
+/// [`Session::start_render_with`]).
+fn chosen_output(s: &mut Session, p: &Value, om: &OutputModule) {
+    if str_p(p, "output").or(str_p(p, "path")).is_some() {
+        s.stored_outputs.allow_path(&om.output);
+    }
+}
+
 /// A finished item that is edited goes back to Queued (AE re-queues on change).
 fn requeue(it: &mut RenderQueueItem) {
     if it.render && !matches!(it.status, RenderStatus::Rendering) {
@@ -532,6 +540,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         object.remove("template");
     }
     apply_output(&mut it.output, &templates, s.state.region_of_interest, &output_params, "renderQueue.add")?;
+    chosen_output(s, p, &it.output);
     if let Some(l) = enum_p(p, "log", "renderQueue.add", RenderLog::parse, "errorsOnly|plusSettings|plusPerFrameInfo")? {
         it.log = l;
     }
@@ -588,6 +597,7 @@ fn set_output_module(s: &mut Session, p: &Value) -> Result<Value> {
     let m = module_p(s, i, p, "renderQueue.setOutputModule")?;
     let mut om = module_ref(&s.project.render_queue[i], m).clone();
     let changed = apply_output(&mut om, &s.project.render_templates, s.state.region_of_interest, p, "renderQueue.setOutputModule")?;
+    chosen_output(s, p, &om);
 
     // When aspect is locked, an explicit height-only edit must drive the size.
     // frame_size() derives height from width; calculate the matching width from the
@@ -629,6 +639,7 @@ fn set_output(s: &mut Session, p: &Value) -> Result<Value> {
     let m = module_p(s, i, p, "renderQueue.setOutput")?;
     let mut om = module_ref(&s.project.render_queue[i], m).clone();
     apply_output(&mut om, &s.project.render_templates, None, &json!({"output": path}), "renderQueue.setOutput")?;
+    s.stored_outputs.allow_path(&om.output);
     s.edit("Output To", None, |proj, _| {
         let it = &mut proj.render_queue[i];
         *module_mut(it, m) = om;
@@ -678,7 +689,7 @@ fn render(s: &mut Session, p: &Value) -> Result<Value> {
     {
         log::warn!("{e}");
     }
-    let ids = s.start_render(wait).map_err(EngineError::Other)?;
+    let ids = s.start_render_with(wait, b_p(p, "overwrite").unwrap_or(true)).map_err(EngineError::Other)?;
     let items: Vec<Value> = s.project.render_queue.iter().enumerate().filter(|(_, i)| ids.contains(&i.id)).map(|(k, i)| item_json(s, i, k)).collect();
     Ok(json!({"rendering": s.is_rendering(), "items": items}))
 }
@@ -749,6 +760,7 @@ fn add_output_module(s: &mut Session, p: &Value) -> Result<Value> {
         };
     }
     apply_output(&mut om, &s.project.render_templates, s.state.region_of_interest, p, "render.addOutputModule")?;
+    chosen_output(s, p, &om);
     s.edit("Add Output Module", None, |proj, _| {
         let it = &mut proj.render_queue[i];
         it.extra_outputs.push(om);
@@ -770,6 +782,7 @@ fn pre_render(s: &mut Session, p: &Value) -> Result<Value> {
     it.output = templates.default_output_module(TemplateSlot::PreRender);
     it.output.output = "[compName]_prerender.[fileExtension]".into();
     apply_output(&mut it.output, &templates, s.state.region_of_interest, p, "render.preRender")?;
+    chosen_output(s, p, &it.output);
     it.post_render = PostRenderAction::ImportAndReplace;
     let id = s.edit("Pre-render", None, |proj, _| {
         it.id = proj.render_queue.iter().map(|i| i.id).max().unwrap_or(0) + 1;
@@ -985,6 +998,9 @@ fn set_overflow(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Null) | None => vec![],
         _ => return Err(bad(C, "folders: [path, …]")),
     };
+    for f in &folders {
+        s.stored_outputs.allow_path(f);
+    }
     s.edit("Storage Overflow Folders", None, |proj, _| {
         proj.render_prefs.overflow_folders = folders.clone();
         Ok(())
@@ -1045,7 +1061,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("render.saveCurrentPreview", "Save Current Preview...", ["Composition"], None, "{comp?, path}", has_comp, save_current_preview),
         cmd!("renderQueue.move", "Move in Render Queue", [], None, "{item?|index?, to: n (1-based)}", has_items, move_item),
         cmd!("renderQueue.duplicate", "Duplicate Render Item", [], None, "{item?|index?}", has_items, duplicate),
-        cmd!("renderQueue.render", "Render", [], None, "{wait?: bool (default true; the UI renders in the background)}", has_queued, render),
+        cmd!(
+            "renderQueue.render",
+            "Render",
+            [],
+            None,
+            "{wait?: bool (default true; the UI renders in the background), overwrite?: bool (default true; false keeps files at saved outputs)}",
+            has_queued,
+            render
+        ),
         cmd!("renderQueue.stop", "Stop Rendering", [], None, "{}", rendering, stop),
         query!("renderQueue.list", "Render Queue Items", "{}", list),
         query!("renderQueue.templates", "Render Templates", "{}", templates),

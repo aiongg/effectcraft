@@ -802,6 +802,8 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let cid = main_comp(&proj);
     let poster = cid.and_then(|c| proj.comp(c)).map(|c| c.poster_time).unwrap_or(Tick::ZERO);
     s.replace_project(proj, None);
+    // A template's Render Queue outputs are the template's, not the user's.
+    s.stored_outputs.add_outputs(&s.project, None);
     s.update_sentinel();
     if let Some(c) = cid {
         s.open_comp(c);

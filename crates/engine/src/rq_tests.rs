@@ -229,3 +229,103 @@ fn locked_resize_uses_height_for_height_only_output_module_updates() {
     let comp = s.project.comp(item.comp).unwrap();
     assert_eq!(item.output.output_size(comp, &item.settings), (32, 32), "explicit width retains precedence");
 }
+
+/// Records each export's path and the Storage Overflow folders it was given.
+#[derive(Default)]
+struct Recording(Mutex<Vec<(String, Vec<String>)>>);
+
+impl Exporter for Recording {
+    fn formats(&self) -> Vec<OutputFormat> {
+        OutputFormat::ALL.to_vec()
+    }
+    fn export(&self, job: &ExportJob, _: &mut dyn FnMut(u64, u64) -> bool) -> Result<ExportResult, String> {
+        self.0.lock().unwrap().push((job.path.to_string(), job.project.render_prefs.overflow_folders.clone()));
+        Ok(ExportResult { path: job.path.to_string(), ..Default::default() })
+    }
+}
+
+/// A project in `root/job` whose queue renders "Shot" to each of `outputs`.
+fn saved_queue(root: &std::path::Path, outputs: &[&str], overflow: &[&str]) -> std::path::PathBuf {
+    let _ = std::fs::remove_dir_all(root);
+    std::fs::create_dir_all(root.join("job")).unwrap();
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "Shot", "width": 16, "height": 16, "frameRate": 10, "duration": 0.2})).unwrap();
+    for o in outputs {
+        s.execute("renderQueue.add", json!({"format": "prores", "output": o})).unwrap();
+    }
+    s.execute("renderQueue.setOverflowFolders", json!({"folders": overflow})).unwrap();
+    let project = root.join("job").join("p.ecproj");
+    s.execute("file.saveAs", json!({"path": project.to_string_lossy()})).unwrap();
+    project
+}
+
+fn open_with(project: &std::path::Path, ex: &Arc<Recording>) -> Session {
+    let mut s = Session { exporter: Some(ex.clone()), ..Default::default() };
+    s.execute("file.open", json!({"path": project.to_string_lossy()})).unwrap();
+    s
+}
+
+/// Output paths and overflow folders saved in a project are written to only when they are local
+/// or on the project's own share; a relative one is taken from the project's folder. Output To
+/// chosen in this session is used as given.
+#[test]
+fn stored_output_paths_on_other_computers_are_not_written() {
+    let root = std::env::temp_dir().join(format!("ec-rq-stored-{}", std::process::id()));
+    let far = root.join("far").join("x.mov");
+    let slashes = format!("/{}", far.display());
+    let mut outputs = vec![r"\\server\share\out.mov", "beside.mov"];
+    // Linux writes `//tmp/…` as the local file: a render that skipped the check would write it.
+    if cfg!(unix) {
+        outputs.push(&slashes);
+    }
+    let project = saved_queue(&root, &outputs, &[r"\\server\share\spill", "spill"]);
+    let ex = Arc::new(Recording::default());
+    let mut s = open_with(&project, &ex);
+    s.execute("renderQueue.render", json!({})).unwrap();
+    let written = ex.0.lock().unwrap().clone();
+    assert_eq!(written.len(), 1, "{written:?}");
+    assert_eq!(std::path::Path::new(&written[0].0), root.join("job").join("beside.mov"));
+    assert_eq!(written[0].1, vec![root.join("job").join("spill").to_string_lossy().into_owned()]);
+    for (k, it) in s.project.render_queue.iter().enumerate() {
+        let refused = matches!(&it.status, RenderStatus::Failed(e) if e.contains("is not written"));
+        assert_eq!(refused, outputs[k] != "beside.mov", "{}: {:?}", outputs[k], it.status);
+    }
+    // Chosen in this session, the same path is rendered to.
+    s.execute("renderQueue.setOutput", json!({"index": 1, "path": outputs[0]})).unwrap();
+    s.execute("renderQueue.render", json!({})).unwrap();
+    assert!(ex.0.lock().unwrap().last().unwrap().0.ends_with("out.mov"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A render no one watches start (Watch Folder, `overwrite: false`) does not replace a file at an
+/// output path saved in the project; a render started in the app does, and so does an Output To
+/// chosen in this session.
+#[test]
+fn unattended_renders_do_not_replace_files_at_stored_outputs() {
+    let root = std::env::temp_dir().join(format!("ec-rq-replace-{}", std::process::id()));
+    let project = saved_queue(&root, &["out.mov"], &[]);
+    let out = root.join("job").join("out.mov");
+    std::fs::write(&out, b"earlier render").unwrap();
+    let ex = Arc::new(Recording::default());
+
+    let mut s = open_with(&project, &ex);
+    let e = s.execute("renderQueue.render", json!({"overwrite": false})).unwrap_err().to_string();
+    assert!(e.contains("exists and is not replaced"), "{e}");
+    assert!(matches!(&s.project.render_queue[0].status, RenderStatus::Failed(e) if e.contains("out.mov")));
+    assert!(ex.0.lock().unwrap().is_empty());
+
+    let mut host = Session { exporter: Some(ex.clone()), ..Default::default() };
+    let r = host.execute("file.watchFolder", json!({"folder": root.join("job").to_string_lossy()})).unwrap();
+    assert_eq!(r["rendered"][0]["state"], "failed", "{r}");
+    assert!(ex.0.lock().unwrap().is_empty());
+
+    let mut s = open_with(&project, &ex);
+    s.execute("renderQueue.render", json!({})).unwrap();
+    assert_eq!(ex.0.lock().unwrap().len(), 1);
+
+    let mut s = open_with(&project, &ex);
+    s.execute("renderQueue.setOutput", json!({"index": 1, "path": out.to_string_lossy()})).unwrap();
+    s.execute("renderQueue.render", json!({"overwrite": false})).unwrap();
+    assert_eq!(ex.0.lock().unwrap().len(), 2);
+    let _ = std::fs::remove_dir_all(&root);
+}

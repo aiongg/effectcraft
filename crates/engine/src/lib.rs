@@ -516,6 +516,9 @@ pub struct Session {
     pub check_footage_on_open: bool,
     /// Footage paths that came from a document, with that document ([`doc_path`]).
     pub stored_paths: doc_path::StoredPaths,
+    /// Render Queue output paths and Storage Overflow folders that came from a document, with
+    /// that document ([`doc_path`]).
+    pub stored_outputs: doc_path::StoredPaths,
     /// Each footage file's size and modification time when last seen (Settings ▸ Import ▸
     /// Reload Footage Changed on Disk, [`footage_reload`]).
     pub footage_stamps: std::collections::HashMap<String, footage_reload::Stamp>,
@@ -617,6 +620,7 @@ impl Default for Session {
             learn: None,
             check_footage_on_open: false,
             stored_paths: Default::default(),
+            stored_outputs: Default::default(),
             footage_stamps: Default::default(),
             footage_scan: None,
             script_calls: ScriptCalls::default(),
@@ -1143,6 +1147,7 @@ impl Session {
         }
         self.render_job = None;
         self.stored_paths = Default::default();
+        self.stored_outputs = Default::default();
         self.stop_track();
         self.track_job = None;
         self.stop_mask_track();

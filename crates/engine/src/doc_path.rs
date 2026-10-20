@@ -11,6 +11,11 @@
 //! Template, Export Template, Lottie export, Create Shapes from Vector Layer, Convert to Editable
 //! Text) follow a path only through it. Paths the user imports or relinks in this session are
 //! followed as given.
+//!
+//! Render Queue output paths and Storage Overflow folders stored in a document are recorded the
+//! same way (`Session::stored_outputs`): a render writes to one only when it is followed, and a
+//! render no one watches start (Watch Folder, `render --queue`) does not replace an existing file
+//! there (`Session::start_render_with`).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -101,6 +106,31 @@ impl StoredPaths {
                 map.remove(q);
             }
         }
+    }
+
+    /// Record the Render Queue outputs of `p`, loaded from the document at `document`: each
+    /// output module's Output To, those of the Output Module templates, and the Storage Overflow
+    /// folders. A path already recorded keeps the document it came from first.
+    pub(crate) fn add_outputs(&mut self, p: &Project, document: Option<&str>) {
+        let map = Arc::make_mut(&mut self.0);
+        let modules = p.render_queue.iter().flat_map(|i| i.output_modules()).chain(&p.render_templates.output_modules);
+        let outputs = modules.map(|m| m.output.trim()).chain(p.render_prefs.overflow_folders.iter().map(|f| f.trim()));
+        for q in outputs.filter(|q| !q.is_empty()) {
+            map.entry(q.to_string()).or_insert_with(|| document.map(str::to_string));
+        }
+    }
+
+    /// The user chose output path or folder `path` in this session: use it as given from now on.
+    pub(crate) fn allow_path(&mut self, path: &str) {
+        if self.0.contains_key(path.trim()) {
+            Arc::make_mut(&mut self.0).remove(path.trim());
+        }
+    }
+
+    /// The document `path` came from (`Some(None)`: one without a file), or `None` when the path
+    /// was chosen in this session.
+    pub(crate) fn document(&self, path: &str) -> Option<Option<&str>> {
+        self.0.get(path.trim()).map(Option::as_deref)
     }
 
     /// The file to open for footage path `path`.

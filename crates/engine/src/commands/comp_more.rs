@@ -93,6 +93,7 @@ fn queue_frame(s: &mut Session, p: &Value) -> Result<Value> {
     it.output = s.project.render_templates.default_output_module(TemplateSlot::Still);
     if let Some(path) = str_p(p, "path") {
         it.output.output = path.to_string();
+        s.stored_outputs.allow_path(path);
     } else if !it.output.format.is_sequence() {
         it.output.output = "[compName]_frame.[fileExtension]".into();
     }

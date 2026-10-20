@@ -22,6 +22,7 @@ fn new_project(s: &mut Session, _: &Value) -> Result<Value> {
         crate::doc_path::resolve_footage(&mut proj, Some(&tpl));
         s.replace_project(proj, None);
         s.stored_paths.add(&s.project, Some(&tpl));
+        s.stored_outputs.add_outputs(&s.project, Some(&tpl));
         s.update_sentinel();
         return Ok(json!({"template": tpl}));
     }
@@ -54,6 +55,7 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let refused = crate::doc_path::resolve_footage(&mut proj, Some(path));
     s.replace_project(proj, Some(path.to_string()));
     s.stored_paths.add(&s.project, Some(path));
+    s.stored_outputs.add_outputs(&s.project, Some(path));
     s.restore_view(&effectcraft_project::saved_view(&text));
     s.note_project_path(path);
     // Values past the limits (a corrupt or hostile file) were brought within them (#788).

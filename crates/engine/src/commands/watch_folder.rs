@@ -71,7 +71,8 @@ fn render_project(host: &Session, path: &Path) -> Value {
         if queued == 0 {
             return Ok(json!({"state": "done", "items": [], "note": "nothing queued"}));
         }
-        s.start_render(true)?;
+        // No one sees this render start: files at the project's own output paths stay.
+        s.start_render_with(true, false)?;
         let items: Vec<Value> = s
             .project
             .render_queue
