@@ -181,6 +181,17 @@ fn lexical(path: &Path) -> PathBuf {
     out
 }
 
+/// Whether `path` lies in `folder`, component by component. Windows and macOS file systems
+/// usually ignore case, so there the components (drive letters included) are compared without it.
+fn in_folder(path: &Path, folder: &Path) -> bool {
+    if !cfg!(any(windows, target_os = "macos")) {
+        return path.starts_with(folder);
+    }
+    let key = |c: Component| c.as_os_str().to_string_lossy().to_lowercase();
+    let mut p = path.components();
+    folder.components().all(|f| p.next().is_some_and(|c| key(c) == key(f)))
+}
+
 pub(crate) fn default_output_base(home: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
     let home = home.filter(|h| !h.as_os_str().is_empty())?;
     let movies = home.join("Movies");
@@ -390,7 +401,7 @@ impl Session {
     /// a folder a stored output may write to: the project's folder (or the document's), the
     /// Default Output Folder, an unsaved project's default output folder, or a folder the user
     /// chose in this session. The check is lexical (`..` is taken out; links are not followed).
-    fn in_output_folders(&self, path: &str, document: Option<&str>) -> bool {
+    pub(crate) fn in_output_folders(&self, path: &str, document: Option<&str>) -> bool {
         let folder_of = |p: &str| Path::new(p).parent().map(|d| if d.as_os_str().is_empty() { PathBuf::from(".") } else { d.to_path_buf() });
         let mut roots: Vec<PathBuf> = self.path.as_deref().and_then(folder_of).into_iter().chain(document.and_then(folder_of)).collect();
         let pref = self.prefs.export.default_output_folder.trim();
@@ -403,7 +414,7 @@ impl Session {
         }
         roots.extend(self.chosen_output_folders.iter().cloned());
         let p = lexical(Path::new(path));
-        roots.iter().any(|r| p.starts_with(lexical(r)))
+        roots.iter().any(|r| in_folder(&p, &lexical(r)))
     }
 
     /// The user chose output `path` (a file path or template; with `folder`, a Storage Overflow

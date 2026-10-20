@@ -349,6 +349,9 @@ fn stored_outputs_stay_in_the_folders_they_may_write_to() {
     for it in &s.project.render_queue[..2] {
         assert!(matches!(&it.status, RenderStatus::Failed(e) if e.contains("outside the project's folder")), "{:?}", it.status);
     }
+    // These file systems usually ignore case: the project's folder spelled differently is the same folder.
+    #[cfg(any(windows, target_os = "macos"))]
+    assert!(s.in_output_folders(&root.join("job").join("x.mov").to_string_lossy().to_uppercase(), None));
     // The user renders into `elsewhere`: the saved output there is written too.
     let chosen = elsewhere.join("chosen.mov");
     s.execute("renderQueue.setOutput", json!({"index": 3, "path": chosen.to_string_lossy()})).unwrap();
