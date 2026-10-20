@@ -27,10 +27,17 @@ pub fn probe(path: impl AsRef<Path>) -> Result<Footage> {
     }
     let bytes = std::fs::read(path).map_err(|e| MediaError::Io(format!("{}: {e}", path.display())))?;
     if crate::MODEL_EXTENSIONS.contains(&ext_of(path).as_str()) {
-        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        return probe_model(&path.to_string_lossy(), &bytes, &|uri| std::fs::read(dir.join(uri)).ok());
+        return probe_model(&path.to_string_lossy(), &bytes, &|uri| std::fs::read(model_resource(path, uri)?).ok());
     }
     probe_bytes(&path.to_string_lossy(), bytes.into())
+}
+
+/// The file to read for `uri`, a resource (buffer, texture, MTL file) the 3D model at `model`
+/// names: taken from the model's folder when relative, and only a local file or one on the
+/// model's own network share (see `craft_docpath`). Import and rendering both read through this.
+pub fn model_resource(model: &Path, uri: &str) -> Option<std::path::PathBuf> {
+    let model = std::path::absolute(model).unwrap_or_else(|_| model.to_path_buf());
+    craft_docpath::resolve(uri, Some(&model)).ok().filter(|p| p.is_absolute())
 }
 
 /// Probe a 3D model (glTF 2.0 / OBJ / STL / FBX): a [`FootageKind::Model`] item whose duration is its
@@ -309,6 +316,33 @@ fn averaged_rate(timescale: u32, durations: impl Iterator<Item = u32>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A model's buffer is read from beside it, never from another computer: a glTF whose
+    /// buffer names a network path does not import.
+    #[test]
+    fn model_resources_on_other_computers_are_not_read() {
+        let root = std::env::temp_dir().join(format!("ec-model-uri-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("job")).unwrap();
+        std::fs::create_dir_all(root.join("far")).unwrap();
+        std::fs::write(root.join("job").join("buf.bin"), [0u8; 4]).unwrap();
+        std::fs::write(root.join("far").join("buf.bin"), [0u8; 4]).unwrap();
+        let mut uris = vec![r"\\server\share\buf.bin".to_string(), "file://server/share/buf.bin".to_string()];
+        // Linux reads `//tmp/…/buf.bin` as the local file: a loader that skipped the check would find it.
+        if cfg!(unix) {
+            uris.push(format!("/{}", root.join("far").join("buf.bin").display()));
+        }
+        let model = root.join("job").join("m.gltf");
+        let gltf = |uri: &str| serde_json::json!({"asset": {"version": "2.0"}, "buffers": [{"uri": uri, "byteLength": 4}]}).to_string();
+        std::fs::write(&model, gltf("buf.bin")).unwrap();
+        assert!(probe(&model).is_ok());
+        for uri in &uris {
+            std::fs::write(&model, gltf(uri)).unwrap();
+            assert!(probe(&model).is_err(), "{uri}");
+            assert_eq!(model_resource(&model, uri), None, "{uri}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// Durations (in 1/`timescale` s) of `n` frames at `rate` whose times are rounded to the timescale.
     fn rounded(rate: FrameRate, timescale: i64, n: i64) -> Vec<u32> {
