@@ -7,6 +7,7 @@
 //! it reports progress through [`JobShared`], and [`Session::poll_render`] copies item status /
 //! start time / render time back into the project.
 
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -161,6 +162,25 @@ struct Work {
 
 /// Where a relative render output goes when there is no default folder and the project is unsaved:
 /// `~/Movies` when it exists, else the home folder itself.
+/// Why an output or overflow folder saved in a project is outside the folders it may write to.
+const OUTSIDE: &str = "it is outside the project's folder, the Default Output Folder and the folders chosen for output in this session";
+
+/// `path` made absolute with `.` and `..` taken out, without looking at the file system.
+fn lexical(path: &Path) -> PathBuf {
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 pub(crate) fn default_output_base(home: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
     let home = home.filter(|h| !h.as_os_str().is_empty())?;
     let movies = home.join("Movies");
@@ -347,15 +367,61 @@ impl Session {
     }
 
     /// [`Self::resolve_output`], or why an output path stored in the project is not written to:
-    /// it is on another computer or names a device ([`crate::doc_path`]).
+    /// it is on another computer or names a device ([`crate::doc_path`]), or it is outside the
+    /// folders a stored output may write to ([`Self::in_output_folders`]).
     pub fn output_path(&self, item: &RenderQueueItem) -> Result<Option<String>, String> {
         let Some(p) = self.expanded_output(item) else { return Ok(None) };
-        if let Some(document) = self.stored_outputs.document(&item.output.output)
+        let stored = self.stored_outputs.document(&item.output.output);
+        if let Some(document) = stored
             && let Err(crate::doc_path::NotFollowed::Refused(why)) = crate::doc_path::resolve(&p, document)
         {
             return Err(format!("the output {p} is not written: {why}"));
         }
-        Ok(self.output_in_folder(p))
+        let out = self.output_in_folder(p);
+        if let (Some(document), Some(o)) = (stored, &out)
+            && !self.in_output_folders(o, document)
+        {
+            return Err(format!("the output {o} is not written: {OUTSIDE}"));
+        }
+        Ok(out)
+    }
+
+    /// Whether `path`, an output or overflow folder stored in the document at `document`, lies in
+    /// a folder a stored output may write to: the project's folder (or the document's), the
+    /// Default Output Folder, an unsaved project's default output folder, or a folder the user
+    /// chose in this session. The check is lexical (`..` is taken out; links are not followed).
+    fn in_output_folders(&self, path: &str, document: Option<&str>) -> bool {
+        let folder_of = |p: &str| Path::new(p).parent().map(|d| if d.as_os_str().is_empty() { PathBuf::from(".") } else { d.to_path_buf() });
+        let mut roots: Vec<PathBuf> = self.path.as_deref().and_then(folder_of).into_iter().chain(document.and_then(folder_of)).collect();
+        let pref = self.prefs.export.default_output_folder.trim();
+        if !pref.is_empty() {
+            roots.push(PathBuf::from(pref));
+        }
+        if self.path.is_none() {
+            let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+            roots.extend(default_output_base(home));
+        }
+        roots.extend(self.chosen_output_folders.iter().cloned());
+        let p = lexical(Path::new(path));
+        roots.iter().any(|r| p.starts_with(lexical(r)))
+    }
+
+    /// The user chose output `path` (a file path or template; with `folder`, a Storage Overflow
+    /// folder) in this session: render to it as given, and let outputs saved in the project write
+    /// into its folder.
+    pub(crate) fn choose_output(&mut self, path: &str, folder: bool) {
+        self.stored_outputs.allow_path(path);
+        let text = path.trim();
+        // The part before a template token (`/renders/[compName]/x.mov` → `/renders/`).
+        let fixed = text.split('[').next().unwrap_or_default();
+        let p = Path::new(fixed);
+        let dir = if (folder && fixed.len() == text.len()) || fixed.ends_with(['/', '\\']) { Some(p) } else { p.parent() };
+        if let Some(dir) = dir.filter(|d| d.is_absolute()) {
+            let dir = lexical(dir);
+            if !self.chosen_output_folders.contains(&dir) {
+                self.chosen_output_folders.push(dir);
+            }
+        }
     }
 
     fn expanded_output(&self, item: &RenderQueueItem) -> Option<String> {
@@ -469,7 +535,11 @@ impl Session {
             .filter_map(|f| match self.stored_outputs.document(f) {
                 None => Some(f.clone()),
                 Some(document) => match crate::doc_path::resolve(f, document) {
-                    Ok(p) => Some(p.to_string_lossy().into_owned()),
+                    Ok(p) if self.in_output_folders(&p.to_string_lossy(), document) => Some(p.to_string_lossy().into_owned()),
+                    Ok(p) => {
+                        log::warn!("the Storage Overflow folder {} is not used: {OUTSIDE}", p.display());
+                        None
+                    }
                     Err(why) => {
                         log::warn!("the Storage Overflow folder {f} is not used: {why}");
                         None

@@ -297,7 +297,9 @@ build real projects through these interfaces; they are worked examples of everyt
   proresProfile: 4444, output}` then `renderQueue.render {"wait": true}`. Check a render by
   importing it (`file.import`, `file.newCompFromSelection`) and `render_frame {transparent: true}`
   for its alpha (ProRes 4444 and WebM VP9 alpha both read back as straight alpha). Output paths
-  saved in an opened project follow the footage rules (no paths to other computers or devices).
+  saved in an opened project follow the footage rules (no paths to other computers or devices)
+  and stay inside the project's folder, the Default Output Folder or a folder chosen for output
+  in this session.
   `renderQueue.render {"overwrite": false}` keeps files that exist at those saved paths (the item
   fails); Watch Folder and `effectcraft-cli render --queue` without `--overwrite` render that way.
 * **Essential Graphics**: controls can be addressed by name (`essential.set {"layer":"#1",

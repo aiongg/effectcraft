@@ -329,3 +329,33 @@ fn unattended_renders_do_not_replace_files_at_stored_outputs() {
     assert_eq!(ex.0.lock().unwrap().len(), 2);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// An output or overflow folder saved in a project is written only inside the project's folder,
+/// the Default Output Folder or a folder chosen in this session: `..` cannot climb out of the
+/// project's folder, and an absolute path elsewhere on this computer is refused until the user
+/// chooses an output there.
+#[test]
+fn stored_outputs_stay_in_the_folders_they_may_write_to() {
+    let root = std::env::temp_dir().join(format!("ec-rq-folders-{}", std::process::id()));
+    let elsewhere = root.join("elsewhere");
+    let absolute = elsewhere.join("x.mov").to_string_lossy().into_owned();
+    let project = saved_queue(&root, &["../escape.mov", &absolute, "ok/../in.mov"], &["../spill"]);
+    let ex = Arc::new(Recording::default());
+    let mut s = open_with(&project, &ex);
+    s.execute("renderQueue.render", json!({})).unwrap();
+    let written = ex.0.lock().unwrap().clone();
+    assert_eq!(written.len(), 1, "{written:?}");
+    assert!(written[0].0.ends_with("in.mov") && written[0].1.is_empty(), "{written:?}");
+    for it in &s.project.render_queue[..2] {
+        assert!(matches!(&it.status, RenderStatus::Failed(e) if e.contains("outside the project's folder")), "{:?}", it.status);
+    }
+    // The user renders into `elsewhere`: the saved output there is written too.
+    let chosen = elsewhere.join("chosen.mov");
+    s.execute("renderQueue.setOutput", json!({"index": 3, "path": chosen.to_string_lossy()})).unwrap();
+    s.execute("renderQueue.setRender", json!({"index": 2, "render": true})).unwrap();
+    s.execute("renderQueue.render", json!({})).unwrap();
+    let written: Vec<String> = ex.0.lock().unwrap().iter().map(|w| w.0.clone()).collect();
+    assert!(written.contains(&absolute) && written.contains(&chosen.to_string_lossy().into_owned()), "{written:?}");
+    assert!(!written.iter().any(|w| w.contains("escape")), "{written:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}

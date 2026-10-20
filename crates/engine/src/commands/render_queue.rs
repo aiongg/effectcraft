@@ -473,7 +473,7 @@ fn module_mut(it: &mut RenderQueueItem, m: usize) -> &mut OutputModule {
 /// [`Session::start_render_with`]).
 fn chosen_output(s: &mut Session, p: &Value, om: &OutputModule) {
     if str_p(p, "output").or(str_p(p, "path")).is_some() {
-        s.stored_outputs.allow_path(&om.output);
+        s.choose_output(&om.output, false);
     }
 }
 
@@ -639,7 +639,7 @@ fn set_output(s: &mut Session, p: &Value) -> Result<Value> {
     let m = module_p(s, i, p, "renderQueue.setOutput")?;
     let mut om = module_ref(&s.project.render_queue[i], m).clone();
     apply_output(&mut om, &s.project.render_templates, None, &json!({"output": path}), "renderQueue.setOutput")?;
-    s.stored_outputs.allow_path(&om.output);
+    s.choose_output(&om.output, false);
     s.edit("Output To", None, |proj, _| {
         let it = &mut proj.render_queue[i];
         *module_mut(it, m) = om;
@@ -999,7 +999,7 @@ fn set_overflow(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(C, "folders: [path, …]")),
     };
     for f in &folders {
-        s.stored_outputs.allow_path(f);
+        s.choose_output(f, true);
     }
     s.edit("Storage Overflow Folders", None, |proj, _| {
         proj.render_prefs.overflow_folders = folders.clone();

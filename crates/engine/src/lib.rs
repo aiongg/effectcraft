@@ -519,6 +519,9 @@ pub struct Session {
     /// Render Queue output paths and Storage Overflow folders that came from a document, with
     /// that document ([`doc_path`]).
     pub stored_outputs: doc_path::StoredPaths,
+    /// Folders the user chose to render into in this session (Output To, Storage Overflow): an
+    /// output saved in a project may be written there ([`Session::output_path`]).
+    pub chosen_output_folders: Vec<std::path::PathBuf>,
     /// Each footage file's size and modification time when last seen (Settings ▸ Import ▸
     /// Reload Footage Changed on Disk, [`footage_reload`]).
     pub footage_stamps: std::collections::HashMap<String, footage_reload::Stamp>,
@@ -621,6 +624,7 @@ impl Default for Session {
             check_footage_on_open: false,
             stored_paths: Default::default(),
             stored_outputs: Default::default(),
+            chosen_output_folders: vec![],
             footage_stamps: Default::default(),
             footage_scan: None,
             script_calls: ScriptCalls::default(),
