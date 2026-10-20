@@ -53,14 +53,14 @@ fn watched(s: &Session) -> BTreeSet<String> {
 /// Size and position in the stack of Photoshop layer `l` in the file at `path` now: the layer
 /// at its recorded index when the name still matches, else the first layer with its name.
 fn psd_layer(s: &Session, path: &str, l: &SourceLayer) -> Option<(u32, Option<(u32, u32)>)> {
-    let psd = effectcraft_psd::Psd::parse(s.services.read_file(path).ok()?).ok()?;
+    let psd = effectcraft_psd::Psd::parse(s.services.read_file(&s.footage_file(path).ok()?).ok()?).ok()?;
     let found = psd.layers.get(l.index as usize).filter(|x| x.name == l.name).or_else(|| psd.layers.iter().find(|x| x.name == l.name))?;
     let size = (!found.rect.is_empty()).then(|| (found.rect.width(), found.rect.height()));
     Some((u32::try_from(found.index).ok()?, size))
 }
 
 fn vector_size(s: &Session, f: &Footage) -> Option<(u32, u32)> {
-    let bytes = s.services.read_file(&f.path).ok()?;
+    let bytes = s.services.read_file(&s.footage_file(&f.path).ok()?).ok()?;
     let doc = crate::vector::vector_doc(&f.path, &bytes, f.layer.as_ref(), f.page)?.ok()?;
     (!doc.root.children.is_empty()).then(|| doc.pixel_size())
 }

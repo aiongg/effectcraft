@@ -10,8 +10,8 @@ fn export_lottie(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_p(p, "path").ok_or_else(|| bad("file.exportLottie", "missing `path`"))?.to_string();
     let cid = comp_id(s, p)?;
     let opts = ExportOptions { include_expressions: b_p(p, "includeExpressions").unwrap_or(false), text_as_shapes: b_p(p, "textAsShapes").unwrap_or(false) };
-    let services = s.services.clone();
-    let read = move |f: &str| services.read_file(f).ok();
+    let (services, stored) = (s.services.clone(), s.stored_paths.clone());
+    let read = move |f: &str| services.read_file(&stored.follow(f).ok()?.to_string_lossy()).ok();
     let res = effectcraft_lottie::export_comp(&s.project, cid, &opts, &read).map_err(|e| EngineError::Other(e.to_string()))?;
     let dot = path.to_ascii_lowercase().ends_with(".lottie");
     let bytes = if dot {

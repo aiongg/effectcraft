@@ -7,8 +7,10 @@
 //! replaced by the resolved path, and an item with a refused path is marked missing, so the media
 //! layer never reads it. The session then remembers which paths came from which document
 //! ([`StoredPaths`]); the footage check, the changed-on-disk scan, Reload Footage, Relink, Edit
-//! Original and Reveal in Finder follow a path only through it. Paths the user imports or relinks
-//! in this session are followed as given.
+//! Original, Reveal in Finder and every command that reads a footage file (Collect Files, Save as
+//! Template, Export Template, Lottie export, Create Shapes from Vector Layer, Convert to Editable
+//! Text) follow a path only through it. Paths the user imports or relinks in this session are
+//! followed as given.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -151,6 +153,19 @@ impl crate::Session {
     /// The file to open for footage path `stored` in this session's project.
     pub fn stored_path(&self, stored: &str) -> Result<PathBuf, NotFollowed> {
         self.stored_paths.follow(stored)
+    }
+
+    /// The file to read for footage path `stored`, or the message for a path that is not
+    /// followed. Every command that reads a footage file goes through this or [`Self::footage_files`].
+    pub(crate) fn footage_file(&self, stored: &str) -> Result<String, String> {
+        self.stored_path(stored).map(|p| p.to_string_lossy().into_owned()).map_err(|why| refusal(stored, why))
+    }
+
+    /// The files to read for footage `f`, as `(stored path, file to read)`: its file, or every
+    /// frame of an image sequence. Fails with the message for the first path that is not followed.
+    pub(crate) fn footage_files(&self, f: &Footage) -> Result<Vec<(String, String)>, String> {
+        let files = if f.sequence.is_empty() { std::slice::from_ref(&f.path) } else { f.sequence.as_slice() };
+        files.iter().map(|q| self.footage_file(q).map(|r| (q.clone(), r))).collect()
     }
 }
 

@@ -668,12 +668,18 @@ fn embed_footage(s: &Session, proj: &mut Project, entries: &mut Vec<(String, Vec
         if f.data.is_some() || f.path.is_empty() {
             continue;
         }
-        let files: Vec<String> = if f.sequence.is_empty() { vec![f.path.clone()] } else { f.sequence.clone() };
+        let files = match s.footage_files(f) {
+            Ok(files) => files,
+            Err(reason) => {
+                out.skipped.push(json!({"item": id.0, "name": name, "reason": reason}));
+                continue;
+            }
+        };
         let mut data = vec![];
         let mut missing = None;
-        for file in &files {
+        for (stored, file) in &files {
             match s.services.read_file(file) {
-                Ok(b) => data.push((file.clone(), b)),
+                Ok(b) => data.push((stored.clone(), b)),
                 Err(e) => {
                     missing = Some(format!("{file}: {e}"));
                     break;

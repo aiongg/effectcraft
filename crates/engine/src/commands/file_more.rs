@@ -388,9 +388,16 @@ fn collect_files(s: &mut Session, p: &Value) -> Result<Value> {
         if f.path.is_empty() {
             continue;
         }
-        let files: Vec<String> = if f.sequence.is_empty() { vec![f.path.clone()] } else { f.sequence.clone() };
+        // A footage path that is not followed is neither read nor copied; the item keeps it.
+        let files = match s.footage_files(f) {
+            Ok(files) => files,
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        };
         let mut new_paths = vec![];
-        for src in &files {
+        for (src, file) in &files {
             let mut name = std::path::Path::new(src).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "footage".into());
             let mut k = 2;
             while !used_names.insert(name.clone()) {
@@ -398,7 +405,7 @@ fn collect_files(s: &mut Session, p: &Value) -> Result<Value> {
                 k += 1;
             }
             let dst = format!("{folder}/(Footage)/{name}");
-            match s.services.read_file(src).and_then(|bytes| s.services.write_file(&dst, &bytes)) {
+            match s.services.read_file(file).and_then(|bytes| s.services.write_file(&dst, &bytes)) {
                 Ok(()) => copied += 1,
                 Err(e) => errors.push(format!("{src}: {e}")),
             }

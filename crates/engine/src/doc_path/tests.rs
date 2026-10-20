@@ -151,3 +151,53 @@ fn stored_paths_resolve_against_the_project() {
     #[cfg(windows)]
     assert!(super::resolve(r"\\server\share\x.mov", Some(r"\\SERVER\share\job\intro.ecproj")).is_ok());
 }
+
+/// Collect Files and Save as Template neither read nor copy footage whose stored path is not
+/// followed; footage beside the project is collected and embedded as before.
+#[test]
+fn commands_that_copy_footage_skip_paths_that_are_not_followed() {
+    let root = std::env::temp_dir().join(format!("ec-doc-path-copy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dir = root.join("job");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(root.join("media")).unwrap();
+    std::fs::write(dir.join("clip.png"), b"x").unwrap();
+    std::fs::write(root.join("media").join("far.png"), b"x").unwrap();
+    let mut stored = vec![("unc", r"\\server\share\x.png".to_string()), ("beside", "clip.png".to_string())];
+    // Linux reads `//tmp/…/far.png` as the local file: a command that skipped the check would copy it.
+    if cfg!(unix) {
+        stored.push(("slashes", format!("/{}", root.join("media").join("far.png").display())));
+    }
+    let mut s = Session::default();
+    s.execute("templates.create", json!({"id": "lower-third"})).unwrap();
+    for (name, path) in &stored {
+        let f = Footage { path: path.clone(), width: 64, height: 48, has_video: true, ..Default::default() };
+        Arc::make_mut(&mut s.project).add_item(name, crate::color::Label::None, None, ItemKind::Footage(f));
+    }
+    let project = dir.join("p.ecproj");
+    s.execute("file.saveAs", json!({"path": project.to_string_lossy()})).unwrap();
+
+    let rec = Arc::new(Recording::default());
+    let config = Arc::new(crate::config::MemoryConfig::default());
+    let mut o = Session { services: rec.clone(), config: Some(config), ..Default::default() };
+    o.execute("file.open", json!({"path": project.to_string_lossy()})).unwrap();
+    rec.0.lock().unwrap().clear();
+
+    let collected = root.join("collected");
+    let r = o.execute("file.collectFiles", json!({"folder": collected.to_string_lossy()})).unwrap();
+    assert_eq!(r["copied"], 1, "{r}");
+    assert_eq!(r["errors"].as_array().unwrap().len(), stored.len() - 1, "{r}");
+    let copied: Vec<_> = std::fs::read_dir(collected.join("(Footage)")).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(copied, vec![std::ffi::OsString::from("clip.png")]);
+
+    let r = o.execute("templates.saveAs", json!({"name": "Job"})).unwrap();
+    assert_eq!(r["embedded"], 1, "{r}");
+    assert_eq!(r["linked"].as_array().unwrap().len(), stored.len() - 1, "{r}");
+
+    let seen = rec.0.lock().unwrap().clone();
+    assert!(seen.iter().any(|p| std::path::Path::new(p) == dir.join("clip.png")), "{seen:?}");
+    for p in &seen {
+        assert!(std::path::Path::new(p) == dir.join("clip.png"), "read {p}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
