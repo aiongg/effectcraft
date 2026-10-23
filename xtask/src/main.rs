@@ -427,17 +427,18 @@ fn tests() -> Result<(), String> {
     run(Command::new(cargo).args(["test", "--workspace", "--doc"]))
 }
 
+type Stage = fn() -> Result<(), String>;
+
 /// Every stage runs even when an earlier one fails, so one run reports all the problems.
 fn ci() -> Result<(), String> {
-    let cargo = env!("CARGO");
-    let stages: [(&str, Box<dyn Fn() -> Result<(), String>>); 7] = [
-        ("fmt", Box::new(move || run(Command::new(cargo).args(["fmt", "--check"])))),
-        ("clippy", Box::new(move || run(Command::new(cargo).args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])))),
-        ("tests", Box::new(tests)),
-        ("pdf-deps", Box::new(|| pdf_deps::run(&root()))),
-        ("layers", Box::new(layers)),
-        ("assets", Box::new(assets)),
-        ("wasm", Box::new(wasm)),
+    let stages: [(&str, Stage); 7] = [
+        ("fmt", || run(Command::new(env!("CARGO")).args(["fmt", "--check"]))),
+        ("clippy", || run(Command::new(env!("CARGO")).args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))),
+        ("tests", tests),
+        ("pdf-deps", || pdf_deps::run(&root())),
+        ("layers", layers),
+        ("assets", assets),
+        ("wasm", wasm),
     ];
     let failed: Vec<&str> = stages.iter().filter_map(|(name, stage)| stage().map_err(|e| eprintln!("ci: {name} failed: {e}")).err().map(|()| *name)).collect();
     if failed.is_empty() { Ok(()) } else { Err(format!("ci failed: {}", failed.join(", "))) }
