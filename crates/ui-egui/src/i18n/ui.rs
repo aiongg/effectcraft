@@ -4462,8 +4462,11 @@ mod tests {
     pub(super) const CONVERTED: &[(&str, &str)] = &[
         ("color_picker.rs", include_str!("../color_picker.rs")),
         ("credits.rs", include_str!("../credits.rs")),
+        ("dock.rs", include_str!("../dock.rs")),
+        ("dock_ui.rs", include_str!("../dock_ui.rs")),
         ("header.rs", include_str!("../header.rs")),
         ("menus.rs", include_str!("../menus.rs")),
+        ("prefs_live.rs", include_str!("../prefs_live.rs")),
         ("widgets.rs", include_str!("../widgets.rs")),
         ("panels/anim_tools.rs", include_str!("../panels/anim_tools.rs")),
         ("panels/camera_tracker_ui.rs", include_str!("../panels/camera_tracker_ui.rs")),
