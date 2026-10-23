@@ -413,18 +413,23 @@ fn serve_dir(dir: &std::path::Path, port: u16) -> Result<(), String> {
 /// `effectcraft-gpu`'s tests share one device and serialise on a lock inside their process (several
 /// devices at once crash software Vulkan and GL), so they run in one `cargo test` process instead of
 /// nextest's process per test.
+///
+/// Each run goes ahead when an earlier one fails; the error names every run that failed.
 fn tests() -> Result<(), String> {
     let cargo = env!("CARGO");
     let targets = ["--workspace", "--lib", "--bins", "--tests", "--no-fail-fast"];
     let nextest = Command::new(cargo).args(["nextest", "--version"]).output().is_ok_and(|o| o.status.success());
+    let mut runs = Vec::new();
     if nextest {
-        run(Command::new(cargo).args(["nextest", "run"]).args(targets).args(["-E", "not package(effectcraft-gpu)"]))?;
-        run(Command::new(cargo).args(["test", "-p", "effectcraft-gpu", "--lib"]))?;
+        runs.push(run(Command::new(cargo).args(["nextest", "run"]).args(targets).args(["-E", "not package(effectcraft-gpu)"])));
+        runs.push(run(Command::new(cargo).args(["test", "-p", "effectcraft-gpu", "--lib", "--no-fail-fast"])));
     } else {
         println!("cargo-nextest not found, running cargo test (install: cargo install cargo-nextest --locked)");
-        run(Command::new(cargo).arg("test").args(targets))?;
+        runs.push(run(Command::new(cargo).arg("test").args(targets)));
     }
-    run(Command::new(cargo).args(["test", "--workspace", "--doc"]))
+    runs.push(run(Command::new(cargo).args(["test", "--workspace", "--doc", "--no-fail-fast"])));
+    let failed: Vec<String> = runs.into_iter().filter_map(Result::err).collect();
+    if failed.is_empty() { Ok(()) } else { Err(failed.join("; ")) }
 }
 
 type Stage = fn() -> Result<(), String>;
