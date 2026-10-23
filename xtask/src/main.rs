@@ -427,15 +427,20 @@ fn tests() -> Result<(), String> {
     run(Command::new(cargo).args(["test", "--workspace", "--doc"]))
 }
 
+/// Every stage runs even when an earlier one fails, so one run reports all the problems.
 fn ci() -> Result<(), String> {
     let cargo = env!("CARGO");
-    run(Command::new(cargo).args(["fmt", "--check"]))?;
-    run(Command::new(cargo).args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))?;
-    tests()?;
-    pdf_deps::run(&root())?;
-    layers()?;
-    assets()?;
-    wasm()
+    let stages: [(&str, Box<dyn Fn() -> Result<(), String>>); 7] = [
+        ("fmt", Box::new(move || run(Command::new(cargo).args(["fmt", "--check"])))),
+        ("clippy", Box::new(move || run(Command::new(cargo).args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])))),
+        ("tests", Box::new(tests)),
+        ("pdf-deps", Box::new(|| pdf_deps::run(&root()))),
+        ("layers", Box::new(layers)),
+        ("assets", Box::new(assets)),
+        ("wasm", Box::new(wasm)),
+    ];
+    let failed: Vec<&str> = stages.iter().filter_map(|(name, stage)| stage().map_err(|e| eprintln!("ci: {name} failed: {e}")).err().map(|()| *name)).collect();
+    if failed.is_empty() { Ok(()) } else { Err(format!("ci failed: {}", failed.join(", "))) }
 }
 
 fn main() -> ExitCode {
