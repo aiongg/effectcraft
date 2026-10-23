@@ -409,12 +409,17 @@ fn serve_dir(dir: &std::path::Path, port: u16) -> Result<(), String> {
 
 /// Lib, bin and integration tests (examples aren't linked; clippy checked them), then doctests,
 /// which nextest doesn't run.
+///
+/// `effectcraft-gpu`'s tests share one device and serialise on a lock inside their process (several
+/// devices at once crash software Vulkan and GL), so they run in one `cargo test` process instead of
+/// nextest's process per test.
 fn tests() -> Result<(), String> {
     let cargo = env!("CARGO");
     let targets = ["--workspace", "--lib", "--bins", "--tests", "--no-fail-fast"];
     let nextest = Command::new(cargo).args(["nextest", "--version"]).output().is_ok_and(|o| o.status.success());
     if nextest {
-        run(Command::new(cargo).args(["nextest", "run"]).args(targets))?;
+        run(Command::new(cargo).args(["nextest", "run"]).args(targets).args(["-E", "not package(effectcraft-gpu)"]))?;
+        run(Command::new(cargo).args(["test", "-p", "effectcraft-gpu", "--lib"]))?;
     } else {
         println!("cargo-nextest not found, running cargo test (install: cargo install cargo-nextest --locked)");
         run(Command::new(cargo).arg("test").args(targets))?;
