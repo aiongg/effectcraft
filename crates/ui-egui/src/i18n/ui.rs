@@ -12,6 +12,9 @@
 //! A row that carries values keeps one `{}` per value and is read with [`tr_args`]; the tests below
 //! refuse a row whose placeholder count differs from its English source, so a translation can never
 //! drop a value, and `tr_args` itself cannot panic.
+//!
+//! A language may lack rows: the English source shows instead, and the `missing_translations_report`
+//! test (run by `cargo xtask ci`) lists what each language lacks.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -37,7 +40,7 @@ pub(crate) fn current() -> &'static str {
 
 type Index = HashMap<&'static str, &'static str>;
 
-/// Every language with panel rows, for the tests.
+/// Every language with panel rows, for the tests and the missing-strings report.
 #[cfg(test)]
 const ROWS: &[(&str, &[(&str, &str)])] = &[
     ("ja", JAPANESE),
@@ -70,6 +73,15 @@ fn catalog(language: &str) -> Option<&'static Index> {
         _ => return None,
     };
     Some(index.get_or_init(|| rows.iter().copied().collect()))
+}
+
+/// The panel strings `language` has no row for (every English source any catalog lists), in
+/// catalog order, for the missing-strings report.
+#[cfg(test)]
+pub(super) fn missing(language: &str) -> Vec<&'static str> {
+    let table = catalog(language);
+    let mut seen = std::collections::HashSet::new();
+    ROWS.iter().flat_map(|(_, rows)| rows.iter().map(|(en, _)| *en)).filter(|en| seen.insert(*en) && !table.is_some_and(|c| c.contains_key(en))).collect()
 }
 
 /// Translate one interface string: the current language's row for `text`, or `text` itself.

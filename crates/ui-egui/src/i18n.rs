@@ -6664,6 +6664,55 @@ mod tests {
         }
     }
 
+    /// The fixed menu entries `code` has no row for. `@effects` is the generated plug-in catalog,
+    /// whose effect names come from the effect catalog instead.
+    fn missing_menu_entries(code: &str) -> Vec<String> {
+        let catalog = menu_catalog(code).unwrap_or_default();
+        let mut missing = Vec::new();
+        for line in TREE.lines() {
+            let line = line.trim().trim_start_matches("[mac] ").trim_start_matches("[!mac] ");
+            if line.is_empty() || line == "---" || line.starts_with('@') {
+                continue;
+            }
+            let mut parts = line.split(" | ");
+            let Some(en) = parts.next() else { continue };
+            let command = parts.next().and_then(|p| p.split_whitespace().next()).unwrap_or("");
+            if !catalog.iter().any(|(id, source, _)| *id == command && *source == en) {
+                missing.push(en.to_string());
+            }
+        }
+        missing
+    }
+
+    /// Lists, per language, the interface strings with no translation, which show in English. It
+    /// always passes: a missing translation never blocks a change. `cargo xtask ci` runs it.
+    #[test]
+    fn missing_translations_report() {
+        const SHOWN: usize = 12;
+        println!("Missing translations (shown in English):");
+        let mut total = 0;
+        for code in CATALOG_CODES {
+            let catalogs = [
+                ("menus", missing_menu_entries(code)),
+                ("panels", ui::missing(code).into_iter().map(str::to_string).collect()),
+                ("effects", effects::missing(code)),
+            ];
+            let count: usize = catalogs.iter().map(|(_, missing)| missing.len()).sum();
+            total += count;
+            println!("{code}: {count}");
+            for (catalog, missing) in &catalogs {
+                if missing.is_empty() {
+                    continue;
+                }
+                let shown: Vec<&String> = missing.iter().take(SHOWN).collect();
+                let more = missing.len().saturating_sub(SHOWN);
+                let more = if more > 0 { format!(" … and {more} more") } else { String::new() };
+                println!("  {catalog} ({}): {shown:?}{more}", missing.len());
+            }
+        }
+        println!("total: {total}");
+    }
+
     #[test]
     fn menu_catalogs_have_no_stale_or_duplicate_rows() {
         let mut actual = BTreeSet::new();

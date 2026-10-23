@@ -15,7 +15,8 @@
 //!
 //! Each row repeats the registry's English name so that a rename upstream fails
 //! [`tests::every_row_names_a_registry_effect`] instead of silently pointing a translation at
-//! another effect.
+//! another effect. An effect with no row draws the registry's English name; the
+//! `missing_translations_report` test (run by `cargo xtask ci`) lists those per language.
 //!
 //! A language decides for itself which names stay English: After Effects' Japanese interface
 //! leaves the `CC` series, the `VR` set and the `OCIO` set in English, while its Simplified
@@ -115,6 +116,19 @@ pub(crate) fn category(source: &str) -> String {
 pub(crate) fn matches(id: &str, english: &str, query: &str) -> bool {
     english.to_lowercase().contains(query)
         || catalog(current()).and_then(|c| c.row(id)).is_some_and(|(_, translated)| translated.to_lowercase().contains(query))
+}
+
+/// The registry's effect names and categories `language` has no row for, for the missing-strings
+/// report.
+#[cfg(test)]
+pub(super) fn missing(language: &str) -> Vec<String> {
+    let table = catalog(language);
+    let effects = effectcraft_engine::effects::registry().iter().filter(|spec| table.and_then(|c| c.row(spec.id)).is_none()).map(|spec| spec.name.to_string());
+    let categories = effectcraft_engine::effects::categories()
+        .into_iter()
+        .filter(|source| table.and_then(|c| c.category(source)).is_none())
+        .map(|source| format!("{source} (category)"));
+    effects.chain(categories).collect()
 }
 
 /// Simplified Chinese (`zh-hans`): one row per effect in the registry.
