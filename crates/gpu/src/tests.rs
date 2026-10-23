@@ -79,6 +79,18 @@ pub(crate) fn on_gl() -> bool {
     gpu().is_some_and(|g| g.ctx.name.ends_with("(Gl)"))
 }
 
+/// The test device is Mesa's software rasteriser, llvmpipe: on OpenGL, or as lavapipe on Vulkan
+/// (the Linux CI gate). Like GL drivers it may divide through a reciprocal, so decision
+/// boundaries get [`GL_BOUNDARY_FLIPS`] here too.
+pub(crate) fn on_llvmpipe() -> bool {
+    gpu().is_some_and(|g| g.ctx.name.starts_with("llvmpipe"))
+}
+
+/// The boundary-flip allowance applies: OpenGL or llvmpipe.
+fn boundary_flips_allowed() -> bool {
+    on_gl() || on_llvmpipe()
+}
+
 /// On GL, the fraction of pixels allowed past the tolerance: pixels on a decision boundary (a
 /// hex cell's edge, a threshold, a corner pin's coverage edge, a median's rank tie) may land on
 /// the other side, since GL drivers may divide through a reciprocal and GLSL's `fma` need not be
@@ -255,7 +267,7 @@ pub(crate) fn check(label: &str, d: Option<Diff>, allow: f64) {
     let frac = d.over as f64 / d.total as f64;
     // Quantised depths: rounding-boundary flips (see the module docs).
     let (allow, cap) = if d.quantized && allow == 0.0 { (0.003, 4.0 / 255.0 + 1e-6) } else { (allow, f32::INFINITY) };
-    let (allow, cap) = if on_gl() { (allow.max(GL_BOUNDARY_FLIPS), f32::INFINITY) } else { (allow, cap) };
+    let (allow, cap) = if boundary_flips_allowed() { (allow.max(GL_BOUNDARY_FLIPS), f32::INFINITY) } else { (allow, cap) };
     assert!(frac <= allow && d.max <= cap, "{label}: {} of {} pixels over tolerance (max {:.6}); worst {:?}", d.over, d.total, d.max, d.worst);
     if d.over > 0 {
         eprintln!("{label}: {} of {} pixels over tolerance (max {:.6})", d.over, d.total, d.max);
@@ -454,7 +466,7 @@ pub(crate) fn effect_direct(id: &str, vals: &[(&str, Value)], adjustment: bool) 
         let out = effectcraft_render::Accelerator::effects(g, &[effectcraft_render::FxStep { spec, ctx: ctx() }], &buf, None).expect("the GPU runs the effect");
         assert_eq!((out.offset, out.scale), (cpu.offset, cpu.scale), "{id}: geometry");
         let d = diff(&cpu.img, &out.img, 1e-3);
-        let allow = if on_gl() { (d.total as f64 * GL_BOUNDARY_FLIPS) as usize } else { 0 };
+        let allow = if boundary_flips_allowed() { (d.total as f64 * GL_BOUNDARY_FLIPS) as usize } else { 0 };
         assert!(
             d.over <= allow,
             "{id} {vals:?} adj {adjustment} scale {scale}: {} of {} pixels over 1e-3 (max {}); worst {:?}",
