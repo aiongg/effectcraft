@@ -80,15 +80,32 @@ pub(crate) fn on_gl() -> bool {
 }
 
 /// The test device is Mesa's software rasteriser, llvmpipe: on OpenGL, or as lavapipe on Vulkan
-/// (the Linux CI gate). Like GL drivers it may divide through a reciprocal, so decision
-/// boundaries get [`GL_BOUNDARY_FLIPS`] here too.
+/// (the Linux CI gate).
 pub(crate) fn on_llvmpipe() -> bool {
     gpu().is_some_and(|g| g.ctx.name.starts_with("llvmpipe"))
 }
 
-/// The boundary-flip allowance applies: OpenGL or llvmpipe.
+thread_local! {
+    static LLVMPIPE_FLIPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Until the guard drops, comparisons on lavapipe get [`GL_BOUNDARY_FLIPS`] too. Only the tests
+/// that measured such flips there opt in (CC HexTile cell edges, CC Threshold RGB thresholds);
+/// every other comparison on the Linux gate stays exact.
+pub(crate) fn allow_llvmpipe_boundary_flips() -> impl Drop {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            LLVMPIPE_FLIPS.with(|f| f.set(false));
+        }
+    }
+    LLVMPIPE_FLIPS.with(|f| f.set(true));
+    Reset
+}
+
+/// The boundary-flip allowance applies: OpenGL, or llvmpipe in a test that opted in.
 fn boundary_flips_allowed() -> bool {
-    on_gl() || on_llvmpipe()
+    on_gl() || (LLVMPIPE_FLIPS.with(std::cell::Cell::get) && on_llvmpipe())
 }
 
 /// On GL, the fraction of pixels allowed past the tolerance: pixels on a decision boundary (a
